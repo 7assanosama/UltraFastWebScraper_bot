@@ -1,0 +1,8 @@
+name = "ultra-fast-bot"
+type = "javascript"
+account_id = "45db2da2daa345fdfebfe273d80e11ec"
+workers_dev = true
+compatibility_date = "2026-03-18"
+
+[env.production]
+vars = { TELEGRAM_BOT_TOKEN = "8522363023:AAF8RV3mmrOq1KyrZcOQJlN5rWReGR3lqgQ" }
