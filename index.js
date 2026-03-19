@@ -18,11 +18,12 @@ async function getPreview(url) {
 }
 
 // 🛡️ Limit attempts to 3 (في Workers ممكن تستخدم KV أو Durable Objects للحفظ الدائم)
-const userAttempts = {};
+const USER_ATTEMPTS = MY_KV_NAMESPACE; // معرف KV من wrangler.toml
+
 async function checkRateLimit(userId) {
-  if (!userAttempts[userId]) userAttempts[userId] = 0;
-  if (userAttempts[userId] >= 3) return false;
-  userAttempts[userId]++;
+  const val = await USER_ATTEMPTS.get(userId) || "0";
+  if (parseInt(val) >= 3) return false;
+  await USER_ATTEMPTS.put(userId, (parseInt(val) + 1).toString(), { expirationTtl: 60 });
   return true;
 }
 
