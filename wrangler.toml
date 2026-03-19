@@ -1,7 +1,3 @@
 name = "ultra-fast-bot"
 main = "index.js"
 compatibility_date = "2026-03-18"
-
-kv_namespaces = [
-  { binding = "USER_ATTEMPTS", id = "ff1219c09d5c456690d602333d2ad56e" }
-]
