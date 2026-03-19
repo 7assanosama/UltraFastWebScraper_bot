@@ -1,8 +1,7 @@
 name = "ultra-fast-bot"
-type = "javascript"
-account_id = "45db2da2daa345fdfebfe273d80e11ec"
-workers_dev = true
+main = "index.js"
 compatibility_date = "2026-03-18"
 
-[env.production]
-vars = { TELEGRAM_BOT_TOKEN = "8522363023:AAF8RV3mmrOq1KyrZcOQJlN5rWReGR3lqgQ" }
+kv_namespaces = [
+  { binding = "USER_ATTEMPTS", id = "ff1219c09d5c456690d602333d2ad56e" }
+]

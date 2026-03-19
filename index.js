@@ -1,51 +1,51 @@
 import { Telegraf } from "telegraf";
-import axios from "axios";
 
-// 🌐 ضع توكن البوت هنا أو استخدم Secret في Cloudflare
-const BOT_TOKEN = TELEGRAM_BOT_TOKEN; // secret environment variable
-const bot = new Telegraf(BOT_TOKEN);
+// 🌐 bot instance (هنعمله lazy)
+let bot;
 
 // ✅ Validate URL
 function isValidUrl(text) {
   try { new URL(text); return true; } catch { return false; }
 }
 
-// 🔍 Get preview (يمكن إضافة caching باستخدام Workers KV لاحقًا)
+// 🔍 Get preview باستخدام fetch (مش axios)
 async function getPreview(url) {
   const apiUrl = `https://link-preview-api.7assanosama.workers.dev/?url=${encodeURIComponent(url)}`;
-  const { data } = await axios.get(apiUrl);
-  return data;
+  const res = await fetch(apiUrl);
+  return await res.json();
 }
 
-// 🛡️ Limit attempts to 3 (في Workers ممكن تستخدم KV أو Durable Objects للحفظ الدائم)
-const USER_ATTEMPTS = MY_KV_NAMESPACE; // معرف KV من wrangler.toml
+// 🛡️ Rate Limit باستخدام KV
+async function checkRateLimit(env, userId) {
+  const key = `rate:${userId}`;
+  const val = await env.USER_ATTEMPTS.get(key) || "0";
 
-async function checkRateLimit(userId) {
-  const val = await USER_ATTEMPTS.get(userId) || "0";
   if (parseInt(val) >= 3) return false;
-  await USER_ATTEMPTS.put(userId, (parseInt(val) + 1).toString(), { expirationTtl: 60 });
+
+  await env.USER_ATTEMPTS.put(key, (parseInt(val) + 1).toString(), {
+    expirationTtl: 60
+  });
+
   return true;
 }
 
-// 📝 Messages (Ar/En)
+// 📝 Messages
 const messages = {
   ar: {
     invalidUrl: "❌ لينك غير صالح",
-    rateLimit: "⛔ لقد استنفذت جميع محاولاتك (3 محاولات فقط للنظام)",
+    rateLimit: "⛔ وصلت للحد المسموح",
     loading: "⏳ جاري التحليل...",
     error: "❌ حصل خطأ",
     noTitle: "بدون عنوان",
     unknown: "غير معروف",
-    preview: "معاينة"
   },
   en: {
     invalidUrl: "❌ Invalid URL",
-    rateLimit: "⛔ You have exhausted your 3 attempts",
+    rateLimit: "⛔ Rate limit exceeded",
     loading: "⏳ Analyzing...",
-    error: "❌ An error occurred",
+    error: "❌ Error occurred",
     noTitle: "No title",
     unknown: "Unknown",
-    preview: "Preview"
   }
 };
 
@@ -54,82 +54,88 @@ function getMsg(ctx, key) {
   return messages[lang][key] || messages.en[key];
 }
 
-// ⚡ Handle text messages
-bot.on("text", async (ctx) => {
-  const url = ctx.message.text.trim();
-  const userId = ctx.from.id;
+// 🌐 Workers handler
+export default {
+  async fetch(request, env) {
 
-  if (!isValidUrl(url)) return ctx.reply(getMsg(ctx, "invalidUrl"));
+    // ✅ init bot مرة واحدة
+    if (!bot) {
+      bot = new Telegraf(env.TELEGRAM_BOT_TOKEN);
 
-  if (!(await checkRateLimit(userId))) return ctx.reply(getMsg(ctx, "rateLimit"));
+      // 📩 Messages
+      bot.on("text", async (ctx) => {
+        const url = ctx.message.text.trim();
+        const userId = ctx.from.id;
 
-  const loadingMsg = await ctx.reply(getMsg(ctx, "loading"));
+        if (!isValidUrl(url)) return ctx.reply(getMsg(ctx, "invalidUrl"));
 
-  try {
-    const data = await getPreview(url);
+        if (!(await checkRateLimit(env, userId))) {
+          return ctx.reply(getMsg(ctx, "rateLimit"));
+        }
 
-    await ctx.telegram.deleteMessage(ctx.chat.id, loadingMsg.message_id);
+        const loadingMsg = await ctx.reply(getMsg(ctx, "loading"));
 
-    const title = data.title || getMsg(ctx, "noTitle");
-    const desc = data.description || "";
-    const image = data.image;
-    const site = data.site_name || data.domain || getMsg(ctx, "unknown");
+        try {
+          const data = await getPreview(url);
 
-    if (image) {
-      return ctx.replyWithPhoto(image, {
-        caption: `🔗 <b>${title}</b>\n🌍 ${site}\n\n${desc}`,
-        parse_mode: "HTML",
+          await ctx.telegram.deleteMessage(ctx.chat.id, loadingMsg.message_id);
+
+          const title = data.title || getMsg(ctx, "noTitle");
+          const desc = data.description || "";
+          const image = data.image;
+          const site = data.site_name || data.domain || getMsg(ctx, "unknown");
+
+          if (image) {
+            return ctx.replyWithPhoto(image, {
+              caption: `🔗 <b>${title}</b>\n🌍 ${site}\n\n${desc}`,
+              parse_mode: "HTML",
+            });
+          }
+
+          ctx.reply(
+            `🔗 <b>${title}</b>\n🌍 ${site}\n\n${desc}`,
+            { parse_mode: "HTML" }
+          );
+
+        } catch (err) {
+          console.error(err);
+          ctx.reply(getMsg(ctx, "error"));
+        }
+      });
+
+      // 🔥 Inline
+      bot.on("inline_query", async (ctx) => {
+        const query = ctx.inlineQuery.query.trim();
+        if (!isValidUrl(query)) return;
+
+        try {
+          const data = await getPreview(query);
+
+          await ctx.answerInlineQuery([
+            {
+              type: "article",
+              id: "1",
+              title: data.title || "Preview",
+              description: data.description || "",
+              input_message_content: {
+                message_text: `🔗 <b>${data.title}</b>\n🌍 ${data.site_name || data.domain}`,
+                parse_mode: "HTML",
+              },
+              thumb_url: data.image,
+            }
+          ]);
+        } catch (err) {
+          console.error(err);
+        }
       });
     }
 
-    ctx.reply(`🔗 <b>${title}</b>\n🌍 ${site}\n\n${desc}`, { parse_mode: "HTML" });
-
-  } catch (err) {
-    console.error(err);
-    ctx.reply(getMsg(ctx, "error"));
-  }
-});
-
-// 🔥 Inline mode
-bot.on("inline_query", async (ctx) => {
-  const query = ctx.inlineQuery.query.trim();
-  if (!isValidUrl(query)) return;
-
-  try {
-    const data = await getPreview(query);
-
-    const title = data.title || getMsg(ctx, "noTitle");
-    const site = data.site_name || data.domain || getMsg(ctx, "unknown");
-    const previewText = data.title || getMsg(ctx, "preview");
-
-    const results = [
-      {
-        type: "article",
-        id: "1",
-        title: previewText,
-        description: data.description || "",
-        input_message_content: {
-          message_text: `🔗 <b>${title}</b>\n🌍 ${site}`,
-          parse_mode: "HTML",
-        },
-        thumb_url: data.image,
-      },
-    ];
-
-    await ctx.answerInlineQuery(results, { cache_time: 60 });
-
-  } catch (err) {
-    console.error(err);
-  }
-});
-
-// 🌐 Workers fetch handler
-export default {
-  async fetch(request) {
+    // 📡 Telegram webhook
     if (request.method === "POST") {
-      const body = await request.json();
-      return bot.handleUpdate(body);
+      const update = await request.json();
+      return bot.handleUpdate(update);
     }
-    return new Response("Bot is running!", { status: 200 });
+
+    return new Response("Bot is running 🚀");
   }
 };
